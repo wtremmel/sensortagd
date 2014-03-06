@@ -8,7 +8,7 @@ $sensors{"BC:6A:29:C3:54:16"} = 1;
 $sensors{"BC:6A:29:AB:DE:B9"} = 1;
 $server = "10.5.1.1";
 $port = 22522;
-
+$sleeptime = 300;
 
 $out = `hciconfig hci0 down`;
 $out = `hciconfig hci0 up`;
@@ -75,7 +75,7 @@ while (1) {
     $count++;
     &sendToServer($count,$alive{$addr},$pres,$humid,$temp);
   }
-  sleep 300;
+  sleep $sleeptime;
 }
 
 
