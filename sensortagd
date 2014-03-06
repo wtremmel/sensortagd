@@ -1,0 +1,329 @@
+#!/usr/bin/perl
+#
+# New Sensortagd
+# trying to make it better
+
+$interface = "hci0";
+$sensors{"BC:6A:29:C3:54:16"} = 1;
+$sensors{"BC:6A:29:AB:DE:B9"} = 1;
+$server = "10.5.1.1";
+$port = 22522;
+
+
+$out = `hciconfig hci0 down`;
+$out = `hciconfig hci0 up`;
+$debug = 1;
+
+$GAP_DEVICE_ID="0x12";
+
+$BAROMETER_DATA_UUID = "f000aa41";
+$BAROMETER_CONF_UUID = "f000aa42";
+$BAROMETER_CALI_UUID = "f000aa43";
+
+$HUMIDITY_DATA_UUID  = "f000aa21";
+$HUMIDITY_CONF_UUID  = "f000aa22";
+
+$ACCELEROMETER_DATA_UUID = "f000aa11";
+$ACCELEROMETER_CONF_UUID = "f000aa12";
+
+
+while (!$found) {
+  foreach $addr (keys %sensors) {
+    # Check if sensortag is alive
+    #
+    my $thisid = &GetDeviceId($addr);
+    if ($thisid) {
+      # get characteristics
+      &readCharacteristics($addr);
+      $alive{$addr} = $thisid;
+      $found = 1;
+    } else {
+      sleep 120;
+    }
+  }
+}
+
+# calibrate Barometer
+foreach $addr (keys %alive) {
+  &calibrateBarometer($addr);
+  # say Hello to server
+  &helloToServer($alive{$addr});
+}
+
+$count=1;
+while (1) {
+  foreach $addr (keys %alive) {
+    my ($temp1,$pres) = &readBarometricPressure($addr);
+    my ($temp2,$humid) = &readHumidity($addr);
+    my $temp;
+    if ($temp1 && $temp2) {
+      $temp = ($temp1+$temp2)/2.0;
+    } elsif ($temp1) {
+      $temp = $temp1;
+    } elsif ($temp2) {
+      $temp = $temp2;
+    } else {
+      $temp = 0;
+    }
+    # ($x,$y,$z) = &readGravity($addr);
+    if ($debug) {
+	    print "$pres hPa\n";
+	    print "$humid %\n";
+	    print "$temp1 °C $temp2 °$temp° C\n";
+	    print "\n";
+    }
+    $count++;
+    &sendToServer($count,$alive{$addr},$pres,$humid,$temp);
+  }
+  sleep 300;
+}
+
+
+exit;
+  
+sub GetDeviceId {
+  my $this = shift;
+
+  my $out= `gatttool -b $this --char-read --handle=$GAP_DEVICE_ID`;
+  # Characteristic value/descriptor: 16 54 c3 00 00 29 6a bc
+  if ($out =~ /:\s+([0-9a-fA-F ]+)$/) {
+    my $id = $1;
+    $id =~ s/ 00 00 //;
+    $id =~ s/ //g;
+    print "$id\n" if $debug;
+    return $id;
+  } else {
+    return undef;
+  }
+}
+
+sub calibrateBarometer {
+  my $addr = shift;
+
+  my $barometerCaliHandle = &getHandle($addr,$BAROMETER_CALI_UUID);
+  my $barometerConfHandle = &getHandle($addr,$BAROMETER_CONF_UUID);
+
+  $out = `gatttool -b $addr --char-write-req --handle=$barometerConfHandle -n 02`;
+  print $out if $debug;
+
+  $out= `gatttool -b $addr --char-read --handle=$barometerCaliHandle`;
+  print $out if $debug;
+
+  if ($out =~ /:\s+(..) (..) (..) (..) (..) (..) (..) (..) (..) (..) (..) (..) (..) (..) (..) (..)/) {
+    $calib{$addr,1} = (hex($2) << 8) + hex($1);
+    $calib{$addr,2} = (hex($4) << 8) + hex($3);
+    $calib{$addr,3} = (hex($6) << 8) + hex($5);
+    $calib{$addr,4} = (hex($8) << 8) + hex($7);
+
+    $calib{$addr,5} = unpack('s', pack('S', hex($10 . $9)));
+    $calib{$addr,6} = unpack('s', pack('S', hex($12 . $11)));
+    $calib{$addr,7} = unpack('s', pack('S', hex($14 . $13)));
+    $calib{$addr,8} = unpack('s', pack('S', hex($16 . $15)));
+  }
+}
+
+
+
+sub readCharacteristics {
+  my $this = shift;
+
+  open(F,"gatttool -b $this --characteristics|");
+  while (<F>) {
+    # handle = 0x0002, char properties = 0x02, char value handle = 0x0003, uuid = 00002a00-0000-1000-8000-00805f9b34fb
+    /char value handle = 0x([0-9a-fA-F]+),.*uuid = ([0-9a-fA-F]+)/;
+    $uuid{$this,$2}=$1;
+  }
+  close F;
+}
+
+# Barometric Pressure
+
+sub readBarometricPressure {
+  my $addr = shift;
+
+  my $barometerConfHandle = &getHandle($addr,$BAROMETER_CONF_UUID);
+  my $barometerDataHandle = &getHandle($addr,$BAROMETER_DATA_UUID);
+
+  `gatttool -b $addr --char-write-req --handle=$barometerConfHandle --value=01`;
+  $out= `gatttool -b $addr --char-read --handle=$barometerDataHandle`;
+  print $out if $debug;
+  `gatttool -b $addr --char-write-req --handle=$barometerConfHandle --value=00`;
+
+  if ($out =~ /:\s+00 00 00 00/) {
+    return undef,undef;
+  }
+
+  if ($out =~ /:\s+(..) (..) (..) (..)/) {
+  # calculate Temperature
+    my $pressRaw= (hex($4) << 8) + hex($3);
+    my $tempRaw = unpack('s', pack('S', hex($2 . $1)));
+    my $tmp2 = ((($calib{$addr,1} * $tempRaw)/0x100 + ($calib{$addr,2} * 0x40 )) * 100) / 0x10000;
+    my $temperature = ($tmp2 / 100.0);
+    print "Temp = " . ($tmp2 / 100.0) . " C\n" if $debug;
+
+  # calculate Pressure
+    my $S=$calib{$addr,3}+(($calib{$addr,4}*$tempRaw)/0x20000)+(((($calib{$addr,5}*$tempRaw)/0x8000)*$tempRaw)/0x80000);
+    my $O=$calib{$addr,6}*0x4000+(($calib{$addr,7}*$tempRaw)/8)+(((($calib{$addr,8}*$tempRaw)/0x8000)*$tempRaw)/16);
+    my $pressure = (($S*$pressRaw+$O)/0x4000) / 100.0;
+
+    print "Pressure = " . $pressure . " hPa\n" if $debug;
+    return $temperature,$pressure;
+  } else {
+    return undef,undef;
+  }
+}
+
+sub readHumidity {
+  my $addr = shift;
+
+  my $humidityConfHandle = &getHandle($addr,$HUMIDITY_CONF_UUID);
+  my $humidityDataHandle = &getHandle($addr,$HUMIDITY_DATA_UUID);
+
+  `gatttool -b $addr --char-write-req --handle=$humidityConfHandle -n 01`;
+  $out= `gatttool -b $addr --char-read --handle=$humidityDataHandle`;
+  `gatttool -b $addr --char-write-req --handle=$humidityConfHandle -n 00`;
+
+  if ($out =~ /:\s+(..) (..) (..) (..)/) {
+    $templsb = hex($1);
+    $tempmsb = hex($2);
+    $humlsb = hex($3);
+    $hummsb = hex($4);
+
+    if ($templsb == 0 &&
+	$tempmsb == 0 &&
+	$humlsb == 0 &&
+	$hummsb == 0) {
+      return undef,undef;
+    }
+
+    $temp = -46.85 + 175.72/65536 * (($tempmsb << 8) + $templsb);
+    $humraw = (($hummsb << 8) + $humlsb) & ~0x0003;
+    $hum = -6.0 + 125.0/65536 * $humraw;
+  
+    print "Temp = $temp\n" if $debug;
+    print "Hum  = $hum \%\n" if $debug;
+    return $temp,$hum;
+  } else {
+    print $out if $debug;
+    return undef,undef;
+  }
+}
+
+sub readGravity {
+  my $addr = shift;
+
+  my $accelConfHandle = &getHandle($addr,$ACCELEROMETER_CONF_UUID);
+  my $accelDataHandle = &getHandle($addr,$ACCELEROMETER_DATA_UUID);
+
+  `gatttool -b $addr --char-write-req --handle=$accelConfHandle -n 01`;
+  my $out= `gatttool -b $addr --char-read --handle=$accelDataHandle`;
+  print $out if $debug;
+  `gatttool -b $addr --char-write-req --handle=$accelConfHandle -n 00`;
+  if ($out =~ /:\s+(..) (..) (..)/) {
+    my $x = (unpack('c', pack('C', hex($1)))) / (64.0/4.0);
+    my $y = (unpack('c', pack('C', hex($2)))) / (64.0/4.0);
+    my $z = (unpack('c', pack('C', hex($3)))) / (64.0/4.0);
+
+    print "x=$x y=$y z=$z\n" if $debug;
+    return sprintf("%.2f",$x),sprintf("%.2f",$y),sprintf("%.2f",$z);
+  } else {
+    return undef,undef,undef;
+  }
+}
+ 
+sub getHandle {
+  my $thisaddr = shift;
+  my $thisuuid = shift;
+
+  return "0x" . $uuid{$thisaddr,$thisuuid};
+}
+
+sub helloToServer {
+  my $id = shift;
+
+  my $node = "1.$id";
+
+  # Say hello to the server
+  open(OUT,"| telnet $server $port");
+  print OUT <<EOF;
+<node>
+  <id>$node</id>
+  <message>reset</message>
+  <sensors>
+    <sensor>
+      <id>$node.1</id>
+      <type>Temperature</type>
+    </sensor>
+    <sensor>
+      <id>$node.2</id>
+      <type>Humidity</type>
+    </sensor>
+    <sensor>
+      <id>$node.3</id>
+      <type>Pressure</type>
+    </sensor>
+  </sensors>
+</node>
+EOF
+  close OUT;
+}
+
+sub sendToServer {
+  my $c = shift;
+  my $id = shift;
+  my $pres = shift;
+  my $hum  = shift;
+  my $temp = shift;
+  
+  my $node = "1.$id";
+
+  if ($pres) {
+    $spres = 
+    "  <sensor>\n" .
+    "    <id>$node.3</id>\n" .
+    "    <count>$c</count>\n" .
+    "    <value>$pres</value>\n" .
+    "  </sensor>\n";
+  }
+
+  if ($hum) {
+    $shum = 
+    "  <sensor>\n" .
+    "    <id>$node.2</id>\n" .
+    "    <count>$c</count>\n" .
+    "    <value>$hum</value>\n" .
+    "  </sensor>\n";
+  }
+
+  if ($temp) {
+    $stemp = 
+    "  <sensor>\n" .
+    "    <id>$node.1</id>\n" .
+    "    <count>$c</count>\n" .
+    "    <value>$temp</value>\n" .
+    "  </sensor>\n";
+  }
+
+  open(OUT,"| telnet $server $port");
+  print OUT <<EOF;
+<sensordata>
+  $stemp
+  $shum
+  $spres
+</sensordata>
+EOF
+  close OUT;
+
+  if ($debug) {
+  print <<EOF;
+<sensordata>
+  $stemp
+  $shum
+  $spres
+</sensordata>
+EOF
+  }
+}
+
+
+
