@@ -1,9 +1,0 @@
-
-Interface: hci0
-Sensors: "BC:6A:29:C3:54:16", "BC:6A:29:AB:DE:B9"
-Locations: "Arbeitszimmer","Loggia"
-Site: Chattenweg5
-Xmlserver: lancre.garf.de
-Xmlport: 22522
-Mqttserver: pi3.garf.de
-
