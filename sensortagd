@@ -40,7 +40,7 @@ while ($sensorline->[$i]) {
 $interface = $Config{"Interface"};
 
 
-$sleeptime = 250;
+$sleeptime = 60;
 
 $out = `hciconfig $interface down`;
 $out = `hciconfig $interface up`;
@@ -83,11 +83,10 @@ while (!$found) {
 }
 
 # calibrate Barometer
-foreach $addr (keys %alive) {
+# foreach $addr (keys %alive) {
   # &calibrateBarometer($addr); # no longer needed here
   # say Hello to server
-  &helloToServer($alive{$addr});
-}
+# }
 
 $count=1;
 # Main loop
