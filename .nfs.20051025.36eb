@@ -40,6 +40,8 @@ while ($sensorline->[$i]) {
 $interface = $Config{"Interface"};
 
 
+$server = $Config{"Xmlserver"};
+$port = $Config{"Xmlport"}; 
 $sleeptime = 250;
 
 $out = `hciconfig $interface down`;
@@ -125,7 +127,7 @@ while (1) {
 
 
 exit;
-
+  
 sub GetDeviceId {
   my $this = shift;
 
@@ -187,8 +189,8 @@ sub readCharacteristics {
 sub readIRTemperature {
   my $addr = shift;
 
-  my $irtemperatureConfHandle = &getHandle($addr,$IRTEMPERATURE_CONF_UUID);
-  my $irtemperatureDataHandle = &getHandle($addr,$IRTEMPERATURE_DATA_UUID);
+  my $irtemperatureConfHandle = &getHandle($addr,$IRTEMPERATURE_CONF_UUID); 
+  my $irtemperatureDataHandle = &getHandle($addr,$IRTEMPERATURE_DATA_UUID); 
 
   `gatttool -i $interface -b $addr --char-write-req --handle=$irtemperatureConfHandle --value=01`;
   my $out= `gatttool -i $interface -b $addr --char-read --handle=$irtemperatureDataHandle`;
@@ -199,14 +201,14 @@ sub readIRTemperature {
     $out= `gatttool -i $interface -b $addr --char-read --handle=$irtemperatureDataHandle`;
     print $out if $debug;
   }
-
+  
   `gatttool -i $interface -b $addr --char-write-req --handle=$irtemperatureConfHandle --value=00`;
   if ($out =~ /:\s+00 00 00 00/) {
     return undef,undef;
   }
 
   # [5C:31:3E:87:AE:E1][LE]> char-read-hnd 0x25
-  # Characteristic value/descriptor: b5 fe fc 0a
+  # Characteristic value/descriptor: b5 fe fc 0a 
 
 
   if ($out =~ /:\s+(..) (..) (..) (..)/) {
@@ -223,7 +225,7 @@ sub readIRTemperature {
     my $tObj = ($tdie2**4 + $N/$S)**0.25 - 273.15;
 
     print "Die temp = " . $temp . "  Target temp = " . $tObj . "\n" if $debug;
-
+    
     return $temp,$tObj;
   }
   return undef,undef;
@@ -305,7 +307,7 @@ sub readHumidity {
     $temp = -46.85 + 175.72/65536 * (($tempmsb << 8) + $templsb);
     $humraw = (($hummsb << 8) + $humlsb) & ~0x0003;
     $hum = -6.0 + 125.0/65536 * $humraw;
-
+  
     print "Temp = $temp\n" if $debug;
     print "Hum  = $hum \%\n" if $debug;
     return $temp,$hum;
@@ -336,7 +338,7 @@ sub readGravity {
     return undef,undef,undef;
   }
 }
-
+ 
 sub getHandle {
   my $thisaddr = shift;
   my $thisuuid = shift;
@@ -348,6 +350,40 @@ sub getHandle {
   }
 }
 
+sub helloToServer {
+  my $id = shift;
+
+  my $node = "1.$id";
+
+  # Say hello to the server
+  open(OUT,"| telnet $server $port");
+  print OUT <<EOF;
+<node>
+  <id>$node</id>
+  <message>reset</message>
+  <sensors>
+    <sensor>
+      <id>$node.1</id>
+      <type>Temperature</type>
+    </sensor>
+    <sensor>
+      <id>$node.2</id>
+      <type>Humidity</type>
+    </sensor>
+    <sensor>
+      <id>$node.3</id>
+      <type>Pressure</type>
+    </sensor>
+    <sensor>
+      <id>$node.4</id>
+      <type>Temperature</type>
+    </sensor>
+  </sensors>
+</node>
+EOF
+  close OUT;
+}
+
 sub sendToServer {
   my $c = shift;
   my $id = shift;
@@ -355,13 +391,19 @@ sub sendToServer {
   my $hum  = shift;
   my $temp = shift;
   my $target = shift;
-
+  
   my $node = "1.$id";
   my $spres, $stemp, $shum, $starget;
 
+  
 
-
-  if ($target) sendToServer
+  if ($target) {
+    $starget = 
+    "  <sensor>\n" .
+    "    <id>$node.4</id>\n" .
+    "    <count>$c</count>\n" .
+    "    <value>$target</value>\n" .
+    "  </sensor>";
     if ($mqttpub) {
       my $path = "/$site/" . $location{$id} . "/target/temperature";
       system("$mqttpub -t $path -m $target");
@@ -369,6 +411,12 @@ sub sendToServer {
   }
 
   if ($pres) {
+    $spres = 
+    "  <sensor>\n" .
+    "    <id>$node.3</id>\n" .
+    "    <count>$c</count>\n" .
+    "    <value>$pres</value>\n" .
+    "  </sensor>";
     if ($mqttpub) {
       my $path = "/$site/" . $location{$id} . "/airpressure";
       system("$mqttpub -t $path -m $pres");
@@ -376,6 +424,12 @@ sub sendToServer {
   }
 
   if ($hum) {
+    $shum = 
+    "  <sensor>\n" .
+    "    <id>$node.2</id>\n" .
+    "    <count>$c</count>\n" .
+    "    <value>$hum</value>\n" .
+    "  </sensor>";
     if ($mqttpub) {
       my $path = "/$site/" . $location{$id} . "/humidity";
       system("$mqttpub -t $path -m $hum");
@@ -383,9 +437,40 @@ sub sendToServer {
   }
 
   if ($temp) {
+    $stemp = 
+    "  <sensor>\n" .
+    "    <id>$node.1</id>\n" .
+    "    <count>$c</count>\n" .
+    "    <value>$temp</value>\n" .
+    "  </sensor>";
     if ($mqttpub) {
       my $path = "/$site/" . $location{$id} . "/temperature";
       system("$mqttpub -t $path -m $temp");
     }
   }
+
+  open(OUT,"| telnet $server $port");
+  print OUT <<EOF;
+<sensordata>
+  $stemp
+  $shum
+  $spres
+  $starget
+</sensordata>
+EOF
+  close OUT;
+
+  if ($debug) {
+  print <<EOF;
+<sensordata>
+  $stemp
+  $shum
+  $spres
+  $starget
+</sensordata>
+EOF
+  }
 }
+
+
+
