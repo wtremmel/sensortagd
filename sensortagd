@@ -14,7 +14,7 @@ if (!$debug) {
 
 use Config::Simple;
 
-Config::Simple->import_from('/home/pi/sensortagd.cfg', \%Config);
+Config::Simple->import_from('./sensortagd.cfg', \%Config);
 
 my $mqttserver= $Config{"Mqttserver"};
 my $sensorline = $Config{"Sensors"};
@@ -361,7 +361,7 @@ sub sendToServer {
 
 
 
-  if ($target) sendToServer
+  if ($target) {
     if ($mqttpub) {
       my $path = "/$site/" . $location{$id} . "/target/temperature";
       system("$mqttpub -t $path -m $target");
