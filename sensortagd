@@ -14,7 +14,7 @@ if (!$debug) {
 
 use Config::Simple;
 
-Config::Simple->import_from('/usr/local/etc/sensortagd/sensortagd.cfg', \%Config);
+Config::Simple->import_from('/home/pi/sensortagd.cfg', \%Config);
 
 my $mqttserver= $Config{"Mqttserver"};
 my $sensorline = $Config{"Sensors"};
@@ -27,7 +27,6 @@ if ($mqttserver) {
   $mqttpub = "mosquitto_pub -h $mqttserver -p 1883 ";
   system("$mqttpub -t /$site/$hostname/sensortagd/status -m started");
 }
-
 
 my $i=0;
 while ($sensorline->[$i]) {
