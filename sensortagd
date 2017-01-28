@@ -10,6 +10,8 @@ if (!$debug) {
   exit if $pid;
 }
 
+
+
 use Config::Simple;
 
 Config::Simple->import_from('/usr/local/etc/sensortagd/sensortagd.cfg', \%Config);
