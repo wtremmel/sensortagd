@@ -44,6 +44,7 @@ $sleeptime = 60;
 
 $out = `hciconfig $interface down`;
 $out = `hciconfig $interface up`;
+$out = `btmgmt le on`;
 
 $GAP_DEVICE_ID="0x12";
 
