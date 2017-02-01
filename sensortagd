@@ -66,14 +66,10 @@ while (!$found) {
   foreach $addr (keys %sensors) {
     # Check if sensortag is alive
     #
+    $detected{$addr} = 0;
     my $thisid = &GetDeviceId($addr);
-    my $failcount = 0;
-    while (!$thisid && $failcount < 10) {
-      $thisid = &GetDeviceId($addr);
-      sleep 5;
-      $failcount++;
-    }
     if ($thisid) {
+      $detected{$addr} = 1;
       # get characteristics
       &readCharacteristics($addr);
       $alive{$addr} = $thisid;
@@ -93,6 +89,20 @@ $count=1;
 # Main loop
 while (1) {
   my $loopstart = time;
+  # check if undetected devices are still there
+  foreach $addr (keys %detected) {
+    if (!$detected{$addr}) {
+      my $thisid = &GetDeviceId($addr);
+      if ($thisid) {
+        $detected{$addr} = 1;
+        # get characteristics
+        &readCharacteristics($addr);
+        $alive{$addr} = $thisid;
+        $location{$thisid} = $location{$addr};
+      }
+    }
+  }
+
   foreach $addr (keys %alive) {
     my ($temp1,$pres) = &readBarometricPressure($addr);
     my ($temp2,$humid) = &readHumidity($addr);
