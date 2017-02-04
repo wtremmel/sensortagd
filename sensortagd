@@ -104,6 +104,7 @@ while (1) {
   }
 
   foreach $addr (keys %alive) {
+    next if !$detected{$addr};
     my ($temp1,$pres) = &readBarometricPressure($addr);
     my ($temp2,$humid) = &readHumidity($addr);
     my ($temp3,$target) = &readIRTemperature($addr);
@@ -136,10 +137,45 @@ while (1) {
 
 exit;
 
+sub GetGatt {
+  my $address = shift;
+  my $handle = shift;
+
+  return undef if (!$detected{$addr} && $handle != $GAP_DEVICE_ID);
+
+  my $out = `gatttool -i $interface -b $address --char-read --handle=$handle 2>&1`;
+
+  if ($out =~ /refused/) {
+    $detected{$addr} = 0;
+    return undef;
+  }
+
+  return $out;
+}
+
+sub WriteGatt {
+  my $address = shift;
+  my $handle = shift;
+  my $value = shift;
+
+  return undef if !$detected{$addr};
+
+  $out = `gatttool -i $interface -b $address --char-write-req --handle=$handle -n $value 2>&1`;
+  if ($out =~ /refused/) {
+    $detected{$addr} = 0;
+    return undef;
+  }
+
+  return $out;
+}
+
+
+
 sub GetDeviceId {
   my $this = shift;
 
-  my $out= `gatttool -i $interface -b $this --char-read --handle=$GAP_DEVICE_ID`;
+  my $out = &GetGatt($this, $GAP_DEVICE_ID);
+
   # Characteristic value/descriptor: 16 54 c3 00 00 29 6a bc
   if ($out =~ /:\s+([0-9a-fA-F ]+)$/) {
     my $id = $1;
@@ -158,10 +194,10 @@ sub calibrateBarometer {
   my $barometerCaliHandle = &getHandle($addr,$BAROMETER_CALI_UUID);
   my $barometerConfHandle = &getHandle($addr,$BAROMETER_CONF_UUID);
 
-  $out = `gatttool -i $interface -b $addr --char-write-req --handle=$barometerConfHandle -n 02`;
+  my $out = &WriteGatt($addr, $barometerConfHandle, "02");
   print $out if $debug;
 
-  $out= `gatttool -i $interface -b $addr --char-read --handle=$barometerCaliHandle`;
+  $out = &GetGatt($addr, $barometerCaliHandle);
   print $out if $debug;
 
   if ($out =~ /:\s+(..) (..) (..) (..) (..) (..) (..) (..) (..) (..) (..) (..) (..) (..) (..) (..)/) {
@@ -200,17 +236,17 @@ sub readIRTemperature {
   my $irtemperatureConfHandle = &getHandle($addr,$IRTEMPERATURE_CONF_UUID);
   my $irtemperatureDataHandle = &getHandle($addr,$IRTEMPERATURE_DATA_UUID);
 
-  `gatttool -i $interface -b $addr --char-write-req --handle=$irtemperatureConfHandle --value=01`;
-  my $out= `gatttool -i $interface -b $addr --char-read --handle=$irtemperatureDataHandle`;
+  &WriteGatt($addr,$irtemperatureConfHandle,"01");
+  my $out = &GetGatt($addr, $irtemperatureDataHandle);
   print $out if $debug;
 
   if ($out =~ /:\s+00 00 00 00/) {
-    `gatttool -i $interface -b $addr --char-write-req --handle=$irtemperatureConfHandle --value=01`;
-    $out= `gatttool -i $interface -b $addr --char-read --handle=$irtemperatureDataHandle`;
+    &WriteGatt($addr,$irtemperatureConfHandle,"01");
+    $out = &GetGatt($addr,$irtemperatureDataHandle);
     print $out if $debug;
   }
 
-  `gatttool -i $interface -b $addr --char-write-req --handle=$irtemperatureConfHandle --value=00`;
+  &WriteGatt($addr,$irtemperatureConfHandle,"00");
   if ($out =~ /:\s+00 00 00 00/) {
     return undef,undef;
   }
@@ -254,17 +290,17 @@ sub readBarometricPressure {
   my $barometerConfHandle = &getHandle($addr,$BAROMETER_CONF_UUID);
   my $barometerDataHandle = &getHandle($addr,$BAROMETER_DATA_UUID);
 
-  `gatttool -i $interface -b $addr --char-write-req --handle=$barometerConfHandle --value=01`;
-  my $out= `gatttool -i $interface -b $addr --char-read --handle=$barometerDataHandle`;
+  &WriteGatt($addr, $barometerConfHandle, "01");
+  my $out = &GetGatt($addr, $barometerDataHandle);
   print $out if $debug;
 
   if ($out =~ /:\s+00 00 00 00/) {
-    `gatttool -i $interface -b $addr --char-write-req --handle=$barometerConfHandle --value=01`;
-    $out= `gatttool -i $interface -b $addr --char-read --handle=$barometerDataHandle`;
+    &WriteGatt($addr, $barometerConfHandle, "01");
+    $out = &GetGatt($addr, $barometerDataHandle);
     print $out if $debug;
   }
 
-  `gatttool -i $interface -b $addr --char-write-req --handle=$barometerConfHandle --value=00`;
+  &WriteGatt($addr, $barometerConfHandle, "00");
   if ($out =~ /:\s+00 00 00 00/) {
     return undef,undef;
   }
@@ -295,9 +331,10 @@ sub readHumidity {
   my $humidityConfHandle = &getHandle($addr,$HUMIDITY_CONF_UUID);
   my $humidityDataHandle = &getHandle($addr,$HUMIDITY_DATA_UUID);
 
-  `gatttool -i $interface -b $addr --char-write-req --handle=$humidityConfHandle -n 01`;
-  $out= `gatttool -i $interface -b $addr --char-read --handle=$humidityDataHandle`;
-  `gatttool -i $interface -b $addr --char-write-req --handle=$humidityConfHandle -n 00`;
+  &WriteGatt($addr, $humidityConfHandle, "01");
+  my $out = &GetGatt($addr, $humidityDataHandle);
+  &WriteGatt($addr, $humidityConfHandle, "00");
+
 
   if ($out =~ /:\s+(..) (..) (..) (..)/) {
     $templsb = hex($1);
@@ -331,10 +368,10 @@ sub readGravity {
   my $accelConfHandle = &getHandle($addr,$ACCELEROMETER_CONF_UUID);
   my $accelDataHandle = &getHandle($addr,$ACCELEROMETER_DATA_UUID);
 
-  `gatttool -i $interface -b $addr --char-write-req --handle=$accelConfHandle -n 01`;
-  my $out= `gatttool -i $interface -b $addr --char-read --handle=$accelDataHandle`;
+  &WriteGatt($addr, $accelConfHandle, "01");
+  my $out = &GetGatt($addr, $accelDataHandle);
   print $out if $debug;
-  `gatttool -i $interface -b $addr --char-write-req --handle=$accelConfHandle -n 00`;
+  &WriteGatt($addr, $accelConfHandle, "00");
   if ($out =~ /:\s+(..) (..) (..)/) {
     my $x = (unpack('c', pack('C', hex($1)))) / (64.0/4.0);
     my $y = (unpack('c', pack('C', hex($2)))) / (64.0/4.0);
